@@ -141,9 +141,16 @@ class TestExecuteJob:
                 "openharness.utils.shell.asyncio.create_subprocess_exec",
                 return_value=mock_process,
             ):
-                job = {"name": "slow-test", "command": "sleep 999", "cwd": "/tmp"}
+                job = {
+                    "name": "slow-test",
+                    "command": "sleep 999",
+                    "cwd": "/tmp",
+                    "timeout_seconds": 17,
+                }
                 entry = await execute_job(job)
                 assert entry["status"] == "timeout"
+                assert entry["stderr"] == "Job timed out after 17s"
+                assert mock_wait.call_args_list[0].kwargs["timeout"] == 17
 
 
 class TestSchedulerLoop:

@@ -414,6 +414,7 @@ def _build_dry_run_preview(
     from openharness.plugins import load_plugins
     from openharness.prompts.context import build_runtime_system_prompt
     from openharness.skills import load_skill_registry
+    from openharness.skills.types import SkillDefinition
     from openharness.tools import create_default_tool_registry
     from openharness.ui.runtime import _resolve_api_client_from_settings
 
@@ -440,9 +441,19 @@ def _build_dry_run_preview(
         for command in plugin.commands
     ]
     command_registry = create_default_command_registry(plugin_commands=plugin_commands)
-    command_match = command_registry.lookup(prompt) if prompt else None
+    preview_prompt = prompt.strip() if prompt else None
+    command_match = command_registry.lookup(preview_prompt) if preview_prompt else None
     skill_registry = load_skill_registry(resolved_cwd, settings=settings)
     skills = skill_registry.list_skills()
+    skill_match: tuple[SkillDefinition, str, str] | None = None
+    if preview_prompt and preview_prompt.startswith("/") and command_match is None:
+        skill_name, _, skill_args = preview_prompt[1:].partition(" ")
+        skill = skill_registry.get(skill_name.strip())
+        command_name = (skill.command_name or skill.name) if skill is not None else ""
+        if skill is not None and skill.user_invocable and command_name and not any(
+            char.isspace() for char in command_name
+        ):
+            skill_match = (skill, skill_args.strip(), command_name)
     mcp_servers = load_mcp_server_configs(settings, plugins)
     tool_registry = create_default_tool_registry()
     tool_schemas = []
@@ -465,7 +476,6 @@ def _build_dry_run_preview(
     except Exception as exc:  # pragma: no cover - defensive diagnostic path
         client_validation = {"status": "error", "detail": str(exc)}
 
-    preview_prompt = prompt.strip() if prompt else None
     prompt_seed = preview_prompt
     if append_system_prompt:
         appended = append_system_prompt.strip()
@@ -515,7 +525,23 @@ def _build_dry_run_preview(
                     f"{behavior['detail']} Dry-run does not execute the command handler."
                 ),
             }
-        elif preview_prompt.startswith("/") and command_match is None:
+        elif preview_prompt.startswith("/") and skill_match is not None:
+            skill, skill_args, command_name = skill_match
+            entrypoint = {
+                "kind": "slash_command",
+                "command": command_name,
+                "args": skill_args,
+                "description": skill.description,
+                "remote_invocable": True,
+                "remote_admin_opt_in": False,
+                "behavior": "model_prompt",
+                "submit_model": skill.model,
+                "detail": (
+                    f"Input resolves to the {skill.source} skill /{command_name}. "
+                    "Dry-run does not submit the rendered skill prompt to the model."
+                ),
+            }
+        elif preview_prompt.startswith("/"):
             entrypoint = {
                 "kind": "unknown_slash_command",
                 "detail": "Input starts with / but does not match a registered slash command.",

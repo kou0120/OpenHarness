@@ -46,6 +46,9 @@ logger = logging.getLogger(__name__)
 TICK_INTERVAL_SECONDS = 30
 """How often the scheduler checks for due jobs."""
 
+DEFAULT_JOB_TIMEOUT_SECONDS = 300
+MAX_JOB_TIMEOUT_SECONDS = 86400
+
 
 # ---------------------------------------------------------------------------
 # History helpers
@@ -309,10 +312,24 @@ def _command_for_job(job: dict[str, Any]) -> str:
     return " ".join(shlex.quote(part) for part in parts)
 
 
+def _job_timeout_seconds(job: dict[str, Any]) -> int:
+    value = job.get("timeout_seconds", DEFAULT_JOB_TIMEOUT_SECONDS)
+    if isinstance(value, bool):
+        return DEFAULT_JOB_TIMEOUT_SECONDS
+    try:
+        timeout_seconds = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_JOB_TIMEOUT_SECONDS
+    if timeout_seconds < 1 or timeout_seconds > MAX_JOB_TIMEOUT_SECONDS:
+        return DEFAULT_JOB_TIMEOUT_SECONDS
+    return timeout_seconds
+
+
 async def execute_job(job: dict[str, Any]) -> dict[str, Any]:
     """Run a single cron job and return a history entry."""
     name = job["name"]
     cwd = Path(job.get("cwd") or ".").expanduser()
+    timeout_seconds = _job_timeout_seconds(job)
     started_at = datetime.now(timezone.utc)
     try:
         command = _command_for_job(job)
@@ -342,7 +359,7 @@ async def execute_job(job: dict[str, Any]) -> dict[str, Any]:
         )
         stdout, stderr = await asyncio.wait_for(
             process.communicate(),
-            timeout=300,
+            timeout=timeout_seconds,
         )
     except asyncio.TimeoutError:
         try:
@@ -358,7 +375,7 @@ async def execute_job(job: dict[str, Any]) -> dict[str, Any]:
             "returncode": -1,
             "status": "timeout",
             "stdout": "",
-            "stderr": "Job timed out after 300s",
+            "stderr": f"Job timed out after {timeout_seconds}s",
         }
         mark_job_run(name, success=False)
         await _notify_job_result(job, entry)

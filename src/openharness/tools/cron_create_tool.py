@@ -24,6 +24,9 @@ class CronCreateToolInput(BaseModel):
     message: str | None = Field(default=None, description="Instruction for an agent_turn cron job")
     timezone: str | None = Field(default=None, description="IANA timezone for interpreting cron schedule")
     cwd: str | None = Field(default=None, description="Optional working directory override")
+    timeout_seconds: int = Field(
+        default=300, ge=1, le=86400, description="Maximum job runtime"
+    )
     enabled: bool = Field(default=True, description="Whether the job is active")
     payload: dict[str, Any] | None = Field(
         default=None,
@@ -87,6 +90,7 @@ class CronCreateTool(BaseTool):
             "name": arguments.name,
             "schedule": arguments.schedule,
             "cwd": arguments.cwd or str(context.cwd),
+            "timeout_seconds": arguments.timeout_seconds,
             "enabled": arguments.enabled,
         }
         if arguments.timezone:

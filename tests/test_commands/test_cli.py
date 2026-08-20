@@ -389,6 +389,64 @@ def test_build_dry_run_preview_classifies_slash_command_and_flags_bad_mcp(monkey
     assert "command not found in PATH" in preview["mcp_servers"][0]["issues"][0]
 
 
+def test_build_dry_run_preview_resolves_project_skill_slash_command(monkeypatch, tmp_path: Path):
+    settings = Settings(api_key="sk-test")
+    skill = types.SimpleNamespace(
+        name="autofix-reflect",
+        command_name="autofix-reflect",
+        description="Reflect on Autofix runs.",
+        content="# Autofix Reflect",
+        source="project",
+        user_invocable=True,
+        model="deepseek-v4-pro",
+    )
+
+    class _FakeSkillRegistry:
+        def list_skills(self):
+            return [skill]
+
+        def get(self, name):
+            return skill if name == skill.name else None
+
+    monkeypatch.setattr("openharness.config.load_settings", lambda: settings)
+    monkeypatch.setattr(
+        "openharness.api.provider.detect_provider",
+        lambda settings: types.SimpleNamespace(name="anthropic"),
+    )
+    monkeypatch.setattr("openharness.api.provider.auth_status", lambda settings: "configured")
+    monkeypatch.setattr("openharness.plugins.load_plugins", lambda settings, cwd: [])
+    monkeypatch.setattr(
+        "openharness.skills.load_skill_registry",
+        lambda cwd, settings=None: _FakeSkillRegistry(),
+    )
+    monkeypatch.setattr(
+        "openharness.prompts.context.build_runtime_system_prompt",
+        lambda *args, **kwargs: "preview prompt",
+    )
+    monkeypatch.setattr(
+        "openharness.ui.runtime._resolve_api_client_from_settings",
+        lambda settings: object(),
+    )
+
+    preview = cli._build_dry_run_preview(
+        prompt="/autofix-reflect",
+        cwd=str(tmp_path),
+        model=None,
+        max_turns=None,
+        base_url=None,
+        system_prompt=None,
+        append_system_prompt=None,
+        api_key=None,
+        api_format=None,
+        permission_mode=None,
+    )
+
+    assert preview["entrypoint"]["kind"] == "slash_command"
+    assert preview["entrypoint"]["command"] == "autofix-reflect"
+    assert preview["entrypoint"]["submit_model"] == "deepseek-v4-pro"
+    assert preview["readiness"]["level"] == "ready"
+
+
 def test_build_dry_run_preview_sets_blocked_when_model_prompt_lacks_auth(monkeypatch, tmp_path: Path):
     settings = Settings(api_key="")
 
