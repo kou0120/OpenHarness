@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from openharness.services.cron import load_cron_jobs
 from openharness.tools.bash_tool import BashTool, BashToolInput
 from openharness.tools.base import ToolExecutionContext
 from openharness.tools.brief_tool import BriefTool, BriefToolInput
@@ -378,11 +379,13 @@ async def test_cron_and_remote_trigger_tools(tmp_path: Path, monkeypatch):
             name="nightly",
             schedule="0 0 * * *",
             command="printf 'CRON_OK'",
+            timeout_seconds=7200,
             notify={"type": "feishu_dm", "user_open_id": "ou_test"},
         ),
         context,
     )
     assert create_result.is_error is False
+    assert load_cron_jobs()[0]["timeout_seconds"] == 7200
 
     list_result = await CronListTool().execute(CronListToolInput(), context)
     assert "nightly" in list_result.output
