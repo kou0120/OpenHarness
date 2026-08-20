@@ -46,6 +46,8 @@ async def test_subprocess_backend_forwards_system_prompt_in_command(monkeypatch,
         cwd=str(tmp_path),
         parent_session_id="sess-001",
         system_prompt="You are a careful code reviewer.",
+        max_turns=40,
+        timeout_seconds=1200,
         task_type="local_agent",
     )
 
@@ -55,6 +57,9 @@ async def test_subprocess_backend_forwards_system_prompt_in_command(monkeypatch,
     argv_str = _argv_str(captured)
     assert "--system-prompt" in argv_str
     assert "You are a careful code reviewer." in argv_str
+    assert "--max-turns 40" in argv_str
+    assert captured["max_turns"] == 40
+    assert captured["timeout_seconds"] == 1200
 
 
 @pytest.mark.asyncio

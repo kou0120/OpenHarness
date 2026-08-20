@@ -76,6 +76,11 @@ def test_build_inherited_cli_flags_none_model_excluded():
     assert "--model" not in flags
 
 
+def test_build_inherited_cli_flags_forwards_max_turns():
+    flags = build_inherited_cli_flags(max_turns=40)
+    assert flags[flags.index("--max-turns") + 1] == "40"
+
+
 def test_build_inherited_cli_flags_empty_string_model_excluded():
     flags = build_inherited_cli_flags(model="")
     assert "--model" not in flags

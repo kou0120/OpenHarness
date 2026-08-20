@@ -27,6 +27,10 @@ class AgentToolInput(BaseModel):
         description="Agent type for definition lookup (e.g. 'general-purpose', 'Explore', 'worker')",
     )
     model: str | None = Field(default=None)
+    max_turns: int | None = Field(default=None, ge=1, le=1000)
+    timeout_seconds: int | None = Field(default=None, ge=1, le=86400)
+    concurrency_key: str | None = Field(default=None, min_length=1, max_length=128)
+    max_concurrency: int | None = Field(default=None, ge=1, le=100)
     command: str | None = Field(default=None, description="Override spawn command")
     team: str | None = Field(default=None, description="Optional team to attach the agent to")
     mode: str = Field(
@@ -72,20 +76,56 @@ class AgentTool(BaseTool):
             cwd=str(context.cwd),
             parent_session_id="main",
             model=arguments.model or (agent_def.model if agent_def else None),
+            max_turns=arguments.max_turns,
+            timeout_seconds=arguments.timeout_seconds,
             command=arguments.command,
             system_prompt=agent_def.system_prompt if agent_def else None,
             permissions=agent_def.permissions if agent_def else [],
             task_type=arguments.mode,
         )
 
+        if (arguments.concurrency_key is None) != (arguments.max_concurrency is None):
+            return ToolResult(
+                output="concurrency_key and max_concurrency must be provided together",
+                is_error=True,
+            )
+        if arguments.concurrency_key is not None and not arguments.concurrency_key.strip():
+            return ToolResult(output="concurrency_key must be non-empty", is_error=True)
+        manager = get_task_manager()
+        reserved = False
+        if arguments.concurrency_key is not None and arguments.max_concurrency is not None:
+            reserved = manager.reserve_concurrency_slot(
+                arguments.concurrency_key, arguments.max_concurrency
+            )
+            if not reserved:
+                return ToolResult(
+                    output=(
+                        f"Concurrency limit reached for {arguments.concurrency_key}: "
+                        f"max_concurrency={arguments.max_concurrency}"
+                    ),
+                    is_error=True,
+                    metadata={
+                        "failure_kind": "concurrency_limit",
+                        "concurrency_key": arguments.concurrency_key,
+                        "max_concurrency": arguments.max_concurrency,
+                    },
+                )
+
         try:
             result = await executor.spawn(config)
         except Exception as exc:
             logger.error("Failed to spawn agent: %s", exc)
             return ToolResult(output=str(exc), is_error=True)
+        finally:
+            if reserved and arguments.concurrency_key is not None:
+                manager.release_concurrency_slot(arguments.concurrency_key)
 
         if not result.success:
             return ToolResult(output=result.error or "Failed to spawn agent", is_error=True)
+        task_record = manager.get_task(result.task_id)
+        if task_record is not None and arguments.concurrency_key is not None:
+            task_record.metadata["concurrency_key"] = arguments.concurrency_key
+            task_record.metadata["max_concurrency"] = str(arguments.max_concurrency)
 
         if arguments.team:
             registry = get_team_registry()
@@ -115,7 +155,12 @@ class AgentTool(BaseTool):
                         "backend_type": result.backend_type,
                         "status": task_record.status,
                         "return_code": task_record.return_code,
+                        "failure_kind": task_record.metadata.get("failure_kind"),
                         "description": arguments.description,
+                        "max_turns": arguments.max_turns,
+                        "timeout_seconds": arguments.timeout_seconds,
+                        "concurrency_key": arguments.concurrency_key,
+                        "max_concurrency": arguments.max_concurrency,
                         "subagent_type": arguments.subagent_type or "agent",
                         "team": team,
                         "mode": arguments.mode,
@@ -137,5 +182,9 @@ class AgentTool(BaseTool):
                 "task_id": result.task_id,
                 "backend_type": result.backend_type,
                 "description": arguments.description,
+                "max_turns": arguments.max_turns,
+                "timeout_seconds": arguments.timeout_seconds,
+                "concurrency_key": arguments.concurrency_key,
+                "max_concurrency": arguments.max_concurrency,
             },
         )
