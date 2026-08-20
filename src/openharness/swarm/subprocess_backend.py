@@ -54,6 +54,7 @@ class SubprocessBackend:
 
         flags = build_inherited_cli_flags(
             model=config.model,
+            max_turns=config.max_turns,
             system_prompt=config.system_prompt,
             system_prompt_mode=config.system_prompt_mode,
             plan_mode_required=config.plan_mode_required,
@@ -92,6 +93,8 @@ class SubprocessBackend:
                 cwd=config.cwd,
                 task_type=config.task_type,
                 model=config.model,
+                max_turns=config.max_turns,
+                timeout_seconds=config.timeout_seconds,
                 command=command,
                 argv=argv,
                 env=extra_env,

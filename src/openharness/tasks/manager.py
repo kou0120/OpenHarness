@@ -57,6 +57,7 @@ class BackgroundTaskManager:
         self._input_locks: dict[str, asyncio.Lock] = {}
         self._generations: dict[str, int] = {}
         self._completion_listeners: dict[str, CompletionListener] = {}
+        self._concurrency_reservations: dict[str, int] = {}
 
     async def create_shell_task(
         self,
@@ -67,6 +68,7 @@ class BackgroundTaskManager:
         task_type: TaskType = "local_bash",
         env: dict[str, str] | None = None,
         argv: list[str] | None = None,
+        timeout_seconds: int | None = None,
     ) -> TaskRecord:
         """Start a background command.
 
@@ -89,6 +91,8 @@ class BackgroundTaskManager:
             raise ValueError("create_shell_task requires either command or argv")
         if command is not None and argv is not None:
             raise ValueError("create_shell_task accepts only one of command or argv")
+        if timeout_seconds is not None and timeout_seconds < 1:
+            raise ValueError("timeout_seconds must be at least 1")
         task_id = _task_id(task_type)
         output_path = get_tasks_dir() / f"{task_id}.log"
         record = TaskRecord(
@@ -101,6 +105,7 @@ class BackgroundTaskManager:
             command=command,
             created_at=time.time(),
             started_at=time.time(),
+            timeout_seconds=timeout_seconds,
             env=dict(env) if env is not None else None,
             argv=list(argv) if argv is not None else None,
         )
@@ -119,6 +124,8 @@ class BackgroundTaskManager:
         cwd: str | Path,
         task_type: TaskType = "local_agent",
         model: str | None = None,
+        max_turns: int | None = None,
+        timeout_seconds: int | None = None,
         api_key: str | None = None,
         command: str | None = None,
         env: dict[str, str] | None = None,
@@ -141,6 +148,8 @@ class BackgroundTaskManager:
             argv = ["python", "-m", "openharness", "--api-key", effective_api_key]
             if model:
                 argv.extend(["--model", model])
+            if max_turns is not None:
+                argv.extend(["--max-turns", str(max_turns)])
 
         record = await self.create_shell_task(
             command=command,
@@ -149,8 +158,11 @@ class BackgroundTaskManager:
             task_type=task_type,
             env=env,
             argv=argv,
+            timeout_seconds=timeout_seconds,
         )
         updated = replace(record, prompt=prompt)
+        if max_turns is not None:
+            updated.metadata["max_turns"] = str(max_turns)
         if task_type != "local_agent":
             updated.metadata["agent_mode"] = task_type
         self._tasks[record.id] = updated
@@ -167,6 +179,27 @@ class BackgroundTaskManager:
         if status is not None:
             tasks = [task for task in tasks if task.status == status]
         return sorted(tasks, key=lambda item: item.created_at, reverse=True)
+
+    def reserve_concurrency_slot(self, key: str, limit: int) -> bool:
+        if not key.strip() or limit < 1:
+            raise ValueError("concurrency key must be non-empty and limit must be positive")
+        running = sum(
+            1
+            for task in self._tasks.values()
+            if task.status == "running" and task.metadata.get("concurrency_key") == key
+        )
+        reserved = self._concurrency_reservations.get(key, 0)
+        if running + reserved >= limit:
+            return False
+        self._concurrency_reservations[key] = reserved + 1
+        return True
+
+    def release_concurrency_slot(self, key: str) -> None:
+        reserved = self._concurrency_reservations.get(key, 0)
+        if reserved <= 1:
+            self._concurrency_reservations.pop(key, None)
+        else:
+            self._concurrency_reservations[key] = reserved - 1
 
     def update_task(
         self,
@@ -253,7 +286,20 @@ class BackgroundTaskManager:
         generation: int,
     ) -> None:
         reader = asyncio.create_task(self._copy_output(task_id, process))
-        return_code = await process.wait()
+        timed_out = False
+        task = self._tasks[task_id]
+        try:
+            if task.timeout_seconds is None:
+                return_code = await process.wait()
+            else:
+                return_code = await asyncio.wait_for(
+                    process.wait(), timeout=task.timeout_seconds
+                )
+        except asyncio.TimeoutError:
+            timed_out = True
+            if process.returncode is None:
+                process.kill()
+            return_code = await process.wait()
         await reader
         await _close_process_stdin(process)
 
@@ -264,7 +310,14 @@ class BackgroundTaskManager:
         task = self._tasks[task_id]
         task.return_code = return_code
         if task.status != "killed":
-            task.status = "completed" if return_code == 0 else "failed"
+            if timed_out:
+                task.status = "failed"
+                task.metadata["failure_kind"] = "timeout"
+                task.metadata["status_note"] = (
+                    f"Task exceeded wall timeout of {task.timeout_seconds} seconds."
+                )
+            else:
+                task.status = "completed" if return_code == 0 else "failed"
         task.ended_at = time.time()
         await self._notify_completion_listeners(task)
         self._processes.pop(task_id, None)
@@ -391,6 +444,7 @@ class BackgroundTaskManager:
                 except (ProcessLookupError, RuntimeError):
                     pass
         self._processes.clear()
+        self._concurrency_reservations.clear()
 
     async def aclose(self) -> None:
         """Asynchronously shut down tracked subprocesses and waiters."""
@@ -417,6 +471,7 @@ class BackgroundTaskManager:
 
         self._processes.clear()
         self._waiters.clear()
+        self._concurrency_reservations.clear()
 
 
 _DEFAULT_MANAGER: BackgroundTaskManager | None = None

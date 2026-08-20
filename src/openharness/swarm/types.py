@@ -276,6 +276,12 @@ class TeammateSpawnConfig:
     model: str | None = None
     """Model override for this teammate."""
 
+    max_turns: int | None = None
+    """Maximum model turns for this teammate."""
+
+    timeout_seconds: int | None = None
+    """Maximum wall-clock runtime for this teammate."""
+
     command: str | None = None
     """Optional explicit command override for subprocess-backed teammates."""
 

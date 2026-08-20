@@ -109,6 +109,7 @@ def get_teammate_command() -> str:
 def build_inherited_cli_flags(
     *,
     model: str | None = None,
+    max_turns: int | None = None,
     system_prompt: str | None = None,
     system_prompt_mode: str | None = None,
     permission_mode: str | None = None,
@@ -129,6 +130,7 @@ def build_inherited_cli_flags(
 
     Args:
         model: Model override to forward (e.g. ``"claude-opus-4-6"``).
+        max_turns: Maximum model turns for the teammate.
         system_prompt: System prompt override to forward to the teammate.
         system_prompt_mode: One of ``"replace"``/``"default"`` or ``"append"``.
             ``append`` maps to ``--append-system-prompt``; anything else uses
@@ -164,6 +166,8 @@ def build_inherited_cli_flags(
     # "inherit" means use the parent's model via the OPENHARNESS_MODEL env var.
     if model and model != "inherit":
         flags.extend(["--model", shlex.quote(model)])
+    if max_turns is not None:
+        flags.extend(["--max-turns", str(max_turns)])
 
     # --- System prompt override ------------------------------------------
     # Agent definitions can carry a dedicated worker system prompt. Forward it

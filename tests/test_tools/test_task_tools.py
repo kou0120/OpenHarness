@@ -121,6 +121,8 @@ async def test_agent_tool_uses_subprocess_backend_and_task_is_pollable(
             description="backend regression check",
             prompt="hello",
             subagent_type="test-worker",
+            max_turns=8,
+            timeout_seconds=10,
             # command echoes one line and exits — minimal subprocess
             command='python -u -c "import sys; print(sys.stdin.readline().strip())"',
         ),
@@ -155,7 +157,38 @@ async def test_agent_tool_uses_subprocess_backend_and_task_is_pollable(
     )
     assert record.command == 'python -u -c "import sys; print(sys.stdin.readline().strip())"'
     assert record.type == "local_agent"
+    assert record.timeout_seconds == 10
+    assert record.metadata["max_turns"] == "8"
     await _wait_for_terminal_task(task_id)
+
+
+@pytest.mark.asyncio
+async def test_agent_tool_enforces_concurrency_limit(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    context = ToolExecutionContext(cwd=tmp_path)
+    arguments = AgentToolInput(
+        description="bounded worker",
+        prompt="ready",
+        subagent_type="worker",
+        concurrency_key="test-diagnosis",
+        max_concurrency=1,
+        timeout_seconds=30,
+        command=(
+            'python -u -c "import sys,time; sys.stdin.readline(); time.sleep(30)"'
+        ),
+    )
+
+    first = await AgentTool().execute(arguments, context)
+    second = await AgentTool().execute(arguments, context)
+
+    assert first.is_error is False
+    assert second.is_error is True
+    assert second.metadata["failure_kind"] == "concurrency_limit"
+    task_id = first.metadata["task_id"]
+    task = get_task_manager().get_task(task_id)
+    assert task is not None
+    assert task.metadata["concurrency_key"] == "test-diagnosis"
+    await get_task_manager().stop_task(task_id)
 
 
 @pytest.mark.asyncio

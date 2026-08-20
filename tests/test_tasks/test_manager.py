@@ -182,6 +182,14 @@ async def test_start_process_forwards_env_to_subprocess(tmp_path: Path, monkeypa
     assert "value=spawn-230" in output
 
 
+def test_concurrency_reservations_are_bounded() -> None:
+    manager = BackgroundTaskManager()
+    accepted = [manager.reserve_concurrency_slot("diagnosis", 2) for _ in range(10)]
+    assert accepted == [True, True, False, False, False, False, False, False, False, False]
+    manager.release_concurrency_slot("diagnosis")
+    assert manager.reserve_concurrency_slot("diagnosis", 2) is True
+
+
 def test_encode_task_worker_payload_wraps_multiline_text() -> None:
     payload = _encode_task_worker_payload("alpha\nbeta\n")
     assert json.loads(payload.decode("utf-8")) == {"text": "alpha\nbeta"}
@@ -207,6 +215,26 @@ async def test_stop_task(tmp_path: Path, monkeypatch):
     updated = manager.get_task(task.id)
     assert updated is not None
     assert updated.status == "killed"
+
+
+@pytest.mark.asyncio
+async def test_task_wall_timeout_marks_failure(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("OPENHARNESS_DATA_DIR", str(tmp_path / "data"))
+    manager = BackgroundTaskManager()
+
+    task = await manager.create_shell_task(
+        command="sleep 30",
+        description="bounded sleeper",
+        cwd=tmp_path,
+        timeout_seconds=1,
+    )
+    await asyncio.wait_for(manager._waiters[task.id], timeout=5)  # type: ignore[attr-defined]
+
+    updated = manager.get_task(task.id)
+    assert updated is not None
+    assert updated.status == "failed"
+    assert updated.metadata["failure_kind"] == "timeout"
+    assert updated.metadata["status_note"] == "Task exceeded wall timeout of 1 seconds."
 
 
 @pytest.mark.asyncio

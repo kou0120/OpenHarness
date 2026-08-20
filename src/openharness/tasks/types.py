@@ -27,6 +27,7 @@ class TaskRecord:
     started_at: float | None = None
     ended_at: float | None = None
     return_code: int | None = None
+    timeout_seconds: int | None = None
     metadata: dict[str, str] = field(default_factory=dict)
     env: dict[str, str] | None = None
     argv: list[str] | None = None
